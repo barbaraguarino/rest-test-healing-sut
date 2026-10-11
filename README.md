@@ -25,19 +25,21 @@ Daí vêm três exigências, detalhadas nas seções seguintes:
 
 | Item | Versão | Observação |
 |---|---|---|
-| Java | 25 | Compatível com o Spring Boot 4.1.1, que aceita do Java 17 ao 26 ([System Requirements](https://docs.spring.io/spring-boot/system-requirements.html)) |
+| Java | 21 | Versão LTS ([Oracle Java SE Support Roadmap](https://www.oracle.com/java/technologies/java-se-support-roadmap.html)), disponível na máquina de desenvolvimento. O código não usa recurso do Java 22 ou superior. Compatível com o Spring Boot 4.1.1, que aceita do Java 17 ao 26 ([System Requirements](https://docs.spring.io/spring-boot/system-requirements.html)) |
 | Spring Boot | 4.1.1 | Lançado em 20/08/2026 ([Spring Blog](https://spring.io/blog/2026/08/20/spring-boot-4-1-1-available-now/)); usa Jackson 3 |
 | springdoc-openapi | 3.1.1 | A linha 3.x acompanha o Spring Boot 4; a 3.1.0 passou a usar o Spring Boot 4.1.0 ([releases](https://github.com/springdoc/springdoc-openapi/releases)) |
 | Maven | 3.10.0, via `./mvnw` | Não precisa ser instalado; o Spring Boot exige 3.6.3 ou superior |
 | Banco | H2 em memória | Sem servidor de banco |
 
-No Ubuntu 24.04, o Java 25 está disponível no repositório `universe` ([pacote openjdk-25-jdk](https://packages.ubuntu.com/search?keywords=openjdk-25-jdk&searchon=names&suite=noble&section=all)):
+No Ubuntu 24.04, o Java 21 está disponível como pacote do sistema ([pacote openjdk-21-jdk](https://packages.ubuntu.com/noble/openjdk-21-jdk)):
 
 ```bash
 sudo apt update
-sudo apt install openjdk-25-jdk
+sudo apt install openjdk-21-jdk
 java -version
 ```
+
+Verificação manual: com a aplicação rodando, abra `http/verificacao-manual.http` no IntelliJ IDEA e execute as requisições de cima para baixo; cada uma tem asserções, e o resultado aparece na aba Tests da janela Services.
 
 ### Decisões técnicas
 
