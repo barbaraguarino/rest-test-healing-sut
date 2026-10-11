@@ -1,0 +1,11 @@
+# Gera o retrato do contrato OpenAPI em docs/openapi.json pelo HTTP Client do IntelliJ IDEA.
+# Pré-requisito: aplicação rodando em localhost:8080.
+# O contrato não é regenerado no build: só muda quando esta requisição é executada de propósito.
+# ">>!" sobrescreve o arquivo; o caminho é relativo a este arquivo.
+
+@host = http://localhost:8080
+
+### Contrato OpenAPI
+GET {{host}}/v3/api-docs
+
+>>! ../docs/openapi.json
