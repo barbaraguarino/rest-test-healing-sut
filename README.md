@@ -4,7 +4,133 @@ API REST de e-commerce (produto, carrinho, frete e pedido) em Java com Spring Bo
 
 A API é o **objeto do experimento**: sobre ela são injetadas mudanças controladas, e os agentes de IA tentam reparar os testes que quebram. Ela não é um sistema de produção.
 
-As instruções de execução, a suíte de testes e o contrato OpenAPI serão incluídos nas próximas etapas. Este documento traz, por enquanto, a especificação a partir da qual a API é implementada.
+Este documento traz o guia de reprodução (como rodar a API, a suíte de testes e as execuções contra testes instáveis, e como o contrato OpenAPI foi gerado) e a especificação a partir da qual a API foi implementada.
+
+## Guia de reprodução
+
+Os passos partem de um clone limpo e são dados de dois jeitos: pelo IntelliJ IDEA, usado no desenvolvimento, e pelo terminal, com o Maven Wrapper (`./mvnw`), que dispensa IDE e instalação do Maven.
+
+### Pré-requisitos
+
+- **JDK 21.** No Ubuntu 24.04, o Java 21 está disponível como pacote do sistema ([pacote openjdk-21-jdk](https://packages.ubuntu.com/noble/openjdk-21-jdk)):
+
+  ```bash
+  sudo apt update
+  sudo apt install openjdk-21-jdk
+  java -version
+  ```
+
+- **Git.**
+- **Maven:** não precisa ser instalado. Na primeira execução, o `./mvnw` (ou `mvnw.cmd`, no Windows) baixa o Maven 3.10.0 e as dependências, o que exige acesso à internet.
+- **IntelliJ IDEA** (opcional): o projeto foi desenvolvido na versão paga, que traz o HTTP Client usado pelos arquivos de `http/`.
+
+### Obter o código
+
+```bash
+git clone https://github.com/barbaraguarino/rest-test-healing-sut.git
+cd rest-test-healing-sut
+git checkout linha-de-base-1
+```
+
+A tag `linha-de-base-1` marca a versão da API e da suíte usada no experimento pelos dois agentes.
+
+### Executar a API
+
+No IntelliJ IDEA:
+
+1. **File → Open** e escolha a pasta do projeto. O IntelliJ reconhece o `pom.xml` e importa o projeto como Maven.
+2. **File → Project Structure → Project → SDK**: escolha o JDK 21.
+3. Na janela **Maven**, clique em **Reload All Maven Projects**. Se alguma classe não reconhecer os pacotes `jakarta.*`, é este passo que resolve.
+4. Abra `RestTestHealingSutApplication` e clique no ▶ ao lado da classe.
+
+No terminal:
+
+```bash
+./mvnw spring-boot:run
+```
+
+A API sobe em `http://localhost:8080`, com o banco H2 em memória vazio. Os dados somem quando a aplicação para.
+
+### Executar a suíte de testes
+
+- No IntelliJ IDEA: botão direito em `src/test/java` → **Run 'All Tests'**.
+- No terminal: `./mvnw test`.
+
+Resultado esperado: **65 execuções, todas passando**. São 61 métodos de teste, e o teste parametrizado do frete por região (RN04) roda uma vez para cada uma das 5 regiões. A aplicação não precisa estar rodando: os testes sobem a própria aplicação, sem abrir porta, e limpam e carregam o banco antes de cada teste.
+
+A suíte tem uma classe de teste por controller, no mesmo pacote da classe testada. O arquivo `docs/matriz-de-cobertura.md` liga cada campo do contrato aos testes que o enviam ou verificam e cada regra de negócio aos seus testes.
+
+### Execuções contra testes instáveis
+
+Teste instável é o que passa ou falha sem nenhuma mudança no código. No experimento, uma falha assim seria confundida com a quebra provocada pela mudança injetada. Testes instáveis ficaram fora do escopo, com uma mitigação: a suíte é executada várias vezes antes do experimento, e um teste que oscile é corrigido ou excluído.
+
+O arquivo `src/test/resources/junit-platform.properties` faz o JUnit executar classes e métodos em ordem aleatória, com a semente 1. A ordem é embaralhada, o que revela testes que dependem de outros terem rodado antes, mas é a mesma a cada execução, o que mantém as execuções reproduzíveis. A semente pode ser trocada pela propriedade `junit.jupiter.execution.order.random.seed`, que tem precedência sobre o arquivo.
+
+O protocolo tem duas rodadas:
+
+| Rodada | O que detecta | No IntelliJ IDEA | No terminal |
+|---|---|---|---|
+| A. Ordem fixa (semente 1), 20 repetições | Instabilidade que não depende da ordem | Na configuração de execução dos testes, **Modify options → Repeat → N times**: 20 | `for i in $(seq 1 20); do ./mvnw -q test \|\| break; done` |
+| B. 10 ordens diferentes (sementes 2 a 11), uma execução cada | Dependência de ordem entre testes | Em **VM options**: `-ea -Djunit.jupiter.execution.order.random.seed=2`, trocando o número até 11 | `for s in $(seq 2 11); do ./mvnw -q test -Djunit.jupiter.execution.order.random.seed=$s \|\| break; done` |
+
+Por que esses números: um teste que falha ao acaso com probabilidade $p$ por execução falha pelo menos uma vez em $n$ execuções com probabilidade $1 - (1-p)^n$. Com $n = 20$, essa chance é de cerca de 64% para $p = 0{,}05$, 88% para $p = 0{,}10$ e 99% para $p = 0{,}20$. O protocolo pega a instabilidade frequente, mas não a rara, o que é coerente com tratá-la como mitigação, e não como detecção exaustiva.
+
+Resultado em 11/10/2026 (Ubuntu 24.04, OpenJDK 21, IntelliJ IDEA, JUnit Jupiter 6.0.3):
+
+| Rodada | Execuções | Falhas |
+|---|---|---|
+| A. Ordem fixa, 20 repetições | 1.300 | 0 |
+| B. Sementes 2 a 11 | 650 | 0 |
+
+O protocolo é repetido sempre que a suíte mudar antes de ser usada no experimento.
+
+### Verificação manual
+
+Com a aplicação rodando, abra `http/verificacao-manual.http` no IntelliJ IDEA e execute as requisições de cima para baixo. Cada uma tem asserções, e o resultado aparece na aba **Tests** da janela **Services**. O arquivo segue o formato do HTTP Client da JetBrains e não faz parte da suíte automatizada.
+
+### Contrato OpenAPI
+
+O arquivo `docs/openapi.json` é o contrato declarado da API: o que ela promete aos clientes, independente do que o código faz.
+
+**Como foi gerado.** Em 11/10/2026, com a aplicação rodando nesta versão do código, o contrato foi obtido de `GET http://localhost:8080/v3/api-docs` (springdoc-openapi 3.1.1) e salvo no repositório. As propriedades `springdoc.writer-with-order-by-keys` e `springdoc.writer-with-default-pretty-printer` deixam as chaves em ordem alfabética e o JSON indentado, e o servidor fica fixo em `/` (`OpenApiConfig`). Assim, duas gerações a partir do mesmo código produzem o mesmo arquivo, e as diferenças entre versões ficam legíveis. Depois de gerado, o arquivo foi conferido contra esta especificação: campos e tipos de cada schema, campos obrigatórios, enums, restrições de formato, códigos de sucesso, parâmetros e ausência de schemas de erro e de limites de negócio.
+
+**Como regenerar.** O contrato não é regenerado no build: ele só muda por decisão explícita, quando o contrato evolui de propósito. Com a aplicação rodando:
+
+- No IntelliJ IDEA: abra `http/gerar-contrato.http` e execute a requisição. A resposta sobrescreve `docs/openapi.json`.
+- No terminal: `curl -s http://localhost:8080/v3/api-docs -o docs/openapi.json`.
+
+### Estrutura do projeto
+
+```
+rest-test-healing-sut/
+├── docs/
+│   ├── openapi.json                 contrato declarado (retrato de /v3/api-docs)
+│   └── matriz-de-cobertura.md       campos do contrato → testes; regras de negócio → testes
+├── http/
+│   ├── verificacao-manual.http      verificação manual pelo HTTP Client do IntelliJ IDEA
+│   └── gerar-contrato.http          regenera docs/openapi.json
+├── src/main/java/br/edu/resttesthealingsut/
+│   ├── produto/  carrinho/  frete/  pedido/
+│   │                                um pacote por recurso: controller, service, entidades com
+│   │                                as regras de negócio, repositório e DTOs (dto/)
+│   └── shared/                      configuração do OpenAPI, valores monetários, corpo de erro,
+│                                    tratador global de erros e mensagens de validação
+├── src/main/resources/
+│   ├── application.properties       banco, desserialização estrita e saída estável do contrato
+│   └── schema.sql                   schema do banco (IDs gerados a partir de 1000)
+├── src/test/java/br/edu/resttesthealingsut/
+│   ├── produto/  carrinho/  frete/  pedido/
+│   │                                testes de cada controller
+│   ├── shared/erro/                 erros gerais: rota inexistente, JSON malformado, método e
+│   │                                tipo de mídia não aceitos
+│   └── suporte/                     verificação de valores numéricos e leitura do ID da resposta
+├── src/test/resources/
+│   ├── junit-platform.properties    ordem aleatória dos testes, com semente fixa
+│   └── fixtures/                    limpeza.sql, cenários por recurso e um arquivo por regra
+│                                    de negócio (regras/)
+├── pom.xml
+└── mvnw, mvnw.cmd, .mvn/            Maven Wrapper
+```
 
 ## Especificação da cobaia
 
@@ -29,17 +155,8 @@ Daí vêm três exigências, detalhadas nas seções seguintes:
 | Spring Boot | 4.1.1 | Lançado em 20/08/2026 ([Spring Blog](https://spring.io/blog/2026/08/20/spring-boot-4-1-1-available-now/)); usa Jackson 3 |
 | springdoc-openapi | 3.1.1 | A linha 3.x acompanha o Spring Boot 4; a 3.1.0 passou a usar o Spring Boot 4.1.0 ([releases](https://github.com/springdoc/springdoc-openapi/releases)) |
 | Maven | 3.10.0, via `./mvnw` | Não precisa ser instalado; o Spring Boot exige 3.6.3 ou superior |
+| JUnit Jupiter | 6.0.3 | Versão gerenciada pelo Spring Boot 4.1.1 ([`gradle.properties` do Spring Boot v4.1.1](https://github.com/spring-projects/spring-boot/blob/v4.1.1/gradle.properties)), sem versão fixada no `pom.xml` |
 | Banco | H2 em memória | Sem servidor de banco |
-
-No Ubuntu 24.04, o Java 21 está disponível como pacote do sistema ([pacote openjdk-21-jdk](https://packages.ubuntu.com/noble/openjdk-21-jdk)):
-
-```bash
-sudo apt update
-sudo apt install openjdk-21-jdk
-java -version
-```
-
-Verificação manual: com a aplicação rodando, abra `http/verificacao-manual.http` no IntelliJ IDEA e execute as requisições de cima para baixo; cada uma tem asserções, e o resultado aparece na aba Tests da janela Services.
 
 ### Decisões técnicas
 
@@ -54,7 +171,13 @@ Verificação manual: com a aplicação rodando, abra `http/verificacao-manual.h
 | Desserialização estrita: campo desconhecido no JSON da requisição gera 400 (`spring.jackson.deserialization.fail-on-unknown-properties=true`) | Sem isso, um teste que ainda envia um campo renomeado ou removido continua passando, porque a API ignora o campo | Comportamento tolerante (campo desconhecido ignorado) |
 | Contrato só com as respostas de sucesso; o tratador global de erros não usa `@ResponseStatus` | Com `@ResponseStatus`, o springdoc anexaria todas as respostas de erro a todas as operações, inclusive um 404 em `POST /produtos`. As categorias de mudança do Agente 1 atuam só nos corpos de sucesso | Declarar os erros de cada operação com `@ApiResponse` (completo, mas enche os controllers de anotações) |
 | Mensagens das anotações de validação escritas no atributo `message` (por exemplo, `@NotNull(message = "é obrigatório")`), a partir de constantes num único arquivo | As mensagens padrão do Bean Validation mudam com o idioma da máquina. Escritas no código, ficam visíveis para os agentes | Arquivo `ValidationMessages.properties` |
-| Testes de API com MockMvc (`@SpringBootTest` + `@AutoConfigureMockMvc`) | A requisição passa por todo o Spring MVC (conversão do JSON, validação e tratamento de erros), então as quebras de contrato aparecem como num servidor real. Não abre porta e é rápido. É uma API de teste consolidada e muito documentada, o que importa porque os agentes vão reparar esse código | RestTestClient (recente, do Spring Framework 7); REST Assured com servidor real (dependência a mais e limpeza manual do banco entre testes) |
+| Testes de API com MockMvc (`@SpringBootTest` + `@AutoConfigureMockMvc`) | A requisição passa por todo o Spring MVC (conversão do JSON, validação e tratamento de erros), então as quebras de contrato aparecem como num servidor real. Não abre porta e é rápido. É uma API de teste consolidada e muito documentada, o que importa porque os agentes vão reparar esse código | RestTestClient (recente, do Spring Framework 7); REST Assured com servidor real (dependência a mais e limpeza manual do banco entre testes); `@WebMvcTest` com os services simulados por `@MockitoBean` (as regras de negócio não rodariam, e uma mudança de regra não quebraria nenhum teste) |
+| Testes no formato de testes de controller de um projeto real em Spring Boot: uma classe por controller, no mesmo pacote da classe testada, `@Nested` por operação, métodos `shouldReturn…When…` e `@DisplayName` "Deve …" | A suíte é o objeto que os agentes reparam. Testes num formato artificial reduziriam a validade externa do experimento | Pacote separado só para os testes de API, com nomes de método em português |
+| Requisição escrita como JSON literal no teste, e não serializada a partir dos DTOs | Com os DTOs, renomear um campo de requisição mudaria o teste junto, e a quebra não apareceria | `ObjectMapper` com os records de requisição |
+| Campos numéricos da resposta verificados com matcher (`value(is(6))`, `value(decimal("51.00"))`); texto e booleano com `value(…)` | `jsonPath(…).value(6)` converte o texto `"6"` no número 6 antes de comparar, e a mudança de um campo de número para texto não quebraria o teste | `value(…)` para todos os tipos |
+| Regras de negócio com limite testadas nos dois lados do limite, com asserção só do resultado da regra (aceito ou recusado, frete grátis ou não) | Uma mudança no valor da regra, para mais ou para menos, quebra um dos dois testes, e o reparo fica na fixture, sem exigir mudança nas asserções | Asserções sobre valores calculados a partir dos dados da fixture |
+| Testes em ordem aleatória com semente fixa (`junit-platform.properties`) | Revela dependência de ordem entre testes e mantém as execuções reproduzíveis | Ordem padrão do JUnit; semente variável, que só aparece num nível de log desligado por padrão |
+| Saída do `/v3/api-docs` com chaves em ordem alfabética e indentada (`springdoc.writer-with-order-by-keys` e `springdoc.writer-with-default-pretty-printer`) | O retrato salvo sai igual a cada geração, e as diferenças entre versões do contrato ficam legíveis | Formatar o arquivo à mão depois de gerado |
 
 ### Entidades e campos
 
@@ -198,10 +321,10 @@ Uma mudança que não quebra nenhum teste fica fora do experimento, porque não 
 
 - **Testes caixa-preta.** O JSON da requisição fica escrito como texto no próprio teste, e a resposta é lida pelo nome dos campos (`jsonPath`). Os testes não usam os DTOs nem as entidades da aplicação: se usassem, renomear um campo no DTO mudaria o teste junto e a quebra não apareceria.
 - **Asserções campo a campo,** nunca comparação do JSON inteiro. A comparação inteira quebraria com qualquer campo novo na resposta, o que não é uma das categorias.
-- **Cobertura do contrato.** Todo campo da resposta é verificado em pelo menos um teste, e todo campo da requisição é enviado em pelo menos um teste.
+- **Cobertura do contrato.** Todo campo da resposta é verificado em pelo menos um teste, e todo campo da requisição é enviado em pelo menos um teste. A correspondência está em `docs/matriz-de-cobertura.md`.
 - **Erros verificados por `codigo` e `campos`,** não pelas mensagens padrão do Bean Validation, que mudam com o idioma da máquina.
 - **Isolamento.** Antes de cada teste, um script SQL limpa o banco e outro carrega a fixture do teste (`@Sql`). Os testes não dependem da ordem de execução.
-- **Fixtures em arquivos SQL** em `src/test/resources/fixtures/`, separadas do código Java dos testes. Assim, o setup não depende do contrato da API, e uma mudança de contrato em `POST /produtos` não quebra todos os testes que precisam de um produto.
+- **Fixtures em arquivos SQL** em `src/test/resources/fixtures/`, separadas do código Java dos testes, organizadas por recurso e, para as regras de negócio, com um arquivo por regra em `regras/`. Assim, o setup não depende do contrato da API, e uma mudança de contrato em `POST /produtos` não quebra todos os testes que precisam de um produto.
 
 ### Determinismo
 
@@ -212,11 +335,12 @@ Uma mudança que não quebra nenhum teste fica fora do experimento, porque não 
 - Os `campos` das respostas de erro saem ordenados pelo caminho do campo, porque o Bean Validation não garante a ordem das violações.
 - Mensagens de erro com texto explícito, sem depender do idioma da máquina.
 - Valores monetários sempre em `BigDecimal`, nunca em `double`.
+- Testes executados em ordem aleatória com semente fixa, e a suíte executada várias vezes antes do experimento, em ordem fixa e em ordens diferentes.
 
 ### Pendências
 
 - Formato das fixtures (arquivos SQL) e valores das regras de negócio. [A confirmar com o João]
-- Nome da tag de versão da API usada no experimento. [A decidir]
+- Se o Agente 2 repara também os valores esperados das asserções nas regras de taxa (bases da RN04, adicional da RN05, RN06, percentual da RN08, arredondamento da RN09), ou se o catálogo de mudanças dele usa só regras de limite. [A confirmar com o João]
 
 ### Referências
 
