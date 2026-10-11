@@ -1,4 +1,4 @@
-package br.edu.resttesthealingsut.api.suporte;
+package br.edu.resttesthealingsut.suporte;
 
 import com.jayway.jsonpath.JsonPath;
 import java.math.BigDecimal;
@@ -11,10 +11,12 @@ import org.springframework.test.web.servlet.MvcResult;
 /**
  * Apoio às asserções sobre o JSON das respostas.
  *
- * <p>Regra da suíte: os valores do JSON são verificados com {@code jsonPath(...).value(matcher)},
- * nunca com {@code jsonPath(...).value(objeto)}. A forma com objeto converte o valor do JSON para o
- * tipo esperado (o texto {@code "6"} vira o número 6), e uma mudança de tipo do campo no contrato
- * deixaria de quebrar o teste.
+ * <p>Regra da suíte: campos numéricos são verificados com matcher ({@code value(is(6))} ou
+ * {@code value(decimal("51.00"))}), nunca com {@code value(6)}. A forma com objeto converte o valor
+ * do JSON para o tipo esperado (o texto {@code "6"} vira o número 6), e a mudança de um campo de
+ * número para texto no contrato deixaria de quebrar o teste. Texto e booleano podem usar
+ * {@code value(objeto)}: o booleano não é convertido a partir de texto, e mudar um campo de texto
+ * para outro tipo não é uma das categorias de mudança do experimento.
  */
 public final class ValoresJson {
 
