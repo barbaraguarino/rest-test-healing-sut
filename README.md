@@ -50,6 +50,8 @@ java -version
 | DTOs separados para requisição e resposta | Permite mudar o contrato só da requisição ou só da resposta | Um DTO por recurso |
 | Contrato gerado pelo springdoc a partir do código, uma vez, e salvo em `docs/openapi.json` como contrato declarado | Gerar evita divergências entre o código e um contrato escrito à mão. Salvar o retrato mantém o contrato independente do código, o que é necessário para injetar regressões | Contrato escrito à mão; contrato regenerado a cada build |
 | Desserialização estrita: campo desconhecido no JSON da requisição gera 400 (`spring.jackson.deserialization.fail-on-unknown-properties=true`) | Sem isso, um teste que ainda envia um campo renomeado ou removido continua passando, porque a API ignora o campo | Comportamento tolerante (campo desconhecido ignorado) |
+| Contrato só com as respostas de sucesso; o tratador global de erros não usa `@ResponseStatus` | Com `@ResponseStatus`, o springdoc anexaria todas as respostas de erro a todas as operações, inclusive um 404 em `POST /produtos`. As categorias de mudança do Agente 1 atuam só nos corpos de sucesso | Declarar os erros de cada operação com `@ApiResponse` (completo, mas enche os controllers de anotações) |
+| Mensagens das anotações de validação escritas no atributo `message` (por exemplo, `@NotNull(message = "é obrigatório")`), a partir de constantes num único arquivo | As mensagens padrão do Bean Validation mudam com o idioma da máquina. Escritas no código, ficam visíveis para os agentes | Arquivo `ValidationMessages.properties` |
 | Testes de API com MockMvc (`@SpringBootTest` + `@AutoConfigureMockMvc`) | A requisição passa por todo o Spring MVC (conversão do JSON, validação e tratamento de erros), então as quebras de contrato aparecem como num servidor real. Não abre porta e é rápido. É uma API de teste consolidada e muito documentada, o que importa porque os agentes vão reparar esse código | RestTestClient (recente, do Spring Framework 7); REST Assured com servidor real (dependência a mais e limpeza manual do banco entre testes) |
 
 ### Entidades e campos
@@ -70,7 +72,7 @@ Tipos em termos de JSON. Campos marcados com * são obrigatórios na requisiçã
 | `estoque` | número inteiro, maior ou igual a zero | * | sim |
 | `pesoGramas` | número inteiro, maior que zero | * | sim |
 | `dimensoes` | objeto: `alturaCm`, `larguraCm`, `comprimentoCm` (números inteiros maiores que zero) | * | sim |
-| `tags` | lista de texto | opcional | sim (lista vazia se ausente) |
+| `tags` | lista de texto | opcional | sim, na ordem enviada (lista vazia se ausente) |
 
 **Carrinho**
 
@@ -88,7 +90,7 @@ Requisição de inclusão de item: `produtoId`* (número inteiro) e `quantidade`
 |---|---|---|
 | `destino` | objeto: `cep`* (texto com 8 dígitos), `uf`* (enum com as 27 UFs) | requisição |
 | `modalidade` | enum: `PADRAO`, `EXPRESSA` | requisição* e resposta |
-| `itens` | lista de objetos: `produtoId`*, `quantidade`* | requisição* |
+| `itens` | lista com pelo menos um objeto: `produtoId`*, `quantidade`* (número inteiro, mínimo 1) | requisição* |
 | `valor` | número decimal | resposta |
 | `prazoDias` | número inteiro | resposta |
 | `freteGratis` | booleano | resposta |
@@ -100,7 +102,7 @@ Requisição de inclusão de item: `produtoId`* (número inteiro) e `quantidade`
 |---|---|---|
 | `carrinhoId` | número inteiro | requisição* |
 | `cliente` | objeto: `nome`*, `email`* (texto) | requisição* e resposta |
-| `enderecoEntrega` | objeto: `logradouro`*, `numero`*, `complemento` (opcional), `cidade`*, `uf`*, `cep`* | requisição* e resposta |
+| `enderecoEntrega` | objeto: `logradouro`*, `numero`*, `complemento` (opcional), `cidade`*, `uf`* (enum com as 27 UFs), `cep`* (texto com 8 dígitos) | requisição* e resposta |
 | `modalidadeFrete` | enum: `PADRAO`, `EXPRESSA` | requisição* e resposta |
 | `cupom` | texto | requisição (opcional) |
 | `id` | número inteiro | resposta |
@@ -116,7 +118,7 @@ As restrições de formato (obrigatório, maior que zero, mínimo 1, 8 dígitos)
 |---|---|---|
 | Produto | `POST /produtos` | 201, com cabeçalho `Location` |
 | | `GET /produtos/{id}` | 200 |
-| | `GET /produtos?categoria={categoria}` | 200, lista ordenada por `sku` |
+| | `GET /produtos?categoria={categoria}` | 200, lista ordenada por `sku`. `categoria` é opcional; sem ela, a lista traz todos os produtos, ativos e inativos |
 | Carrinho | `POST /carrinhos` (sem corpo) | 201, carrinho vazio |
 | | `POST /carrinhos/{id}/itens` | 200, carrinho atualizado |
 | | `GET /carrinhos/{id}` | 200 |
@@ -129,16 +131,21 @@ As restrições de formato (obrigatório, maior que zero, mínimo 1, 8 dígitos)
 
 | Campo | Tipo |
 |---|---|
-| `codigo` | texto: `VALIDACAO`, `JSON_INVALIDO`, `RECURSO_NAO_ENCONTRADO`, `REGRA_DE_NEGOCIO` |
+| `codigo` | texto: `VALIDACAO`, `JSON_INVALIDO`, `RECURSO_NAO_ENCONTRADO`, `REGRA_DE_NEGOCIO`, `REQUISICAO_NAO_SUPORTADA`, `ERRO_INTERNO` |
 | `mensagem` | texto |
 | `campos` | lista de objetos `campo`, `mensagem` (vazia quando não se aplica) |
 
 | Situação | Status | `codigo` |
 |---|---|---|
 | Campo obrigatório ausente ou com formato inválido | 400 | `VALIDACAO` |
-| JSON malformado, campo desconhecido ou tipo incompatível | 400 | `JSON_INVALIDO` |
-| Recurso inexistente | 404 | `RECURSO_NAO_ENCONTRADO` |
+| Parâmetro de path ou de query com tipo ou valor inválido (como `/produtos/abc` ou `?categoria=FOO`) | 400 | `VALIDACAO` |
+| JSON malformado, campo desconhecido, tipo incompatível (inclusive valor de enum inexistente no corpo) ou corpo ausente | 400 | `JSON_INVALIDO` |
+| Recurso ou rota inexistente | 404 | `RECURSO_NAO_ENCONTRADO` |
 | Violação de regra de negócio | 422 | `REGRA_DE_NEGOCIO` |
+| Método HTTP ou tipo de mídia não aceito pelo endpoint | 405, 406 ou 415 | `REQUISICAO_NAO_SUPORTADA` |
+| Erro inesperado (sem detalhes internos no corpo) | 500 | `ERRO_INTERNO` |
+
+Em `VALIDACAO`, `campos` traz um item por violação, com o caminho do campo (`dimensoes.alturaCm`, `itens[0].quantidade`) ou o nome do parâmetro, ordenados pelo caminho. Em `JSON_INVALIDO`, `campos` traz o campo envolvido quando o Jackson o identifica.
 
 ### Regras de negócio
 
@@ -157,6 +164,19 @@ Os valores abaixo foram definidos para a cobaia e não representam um negócio r
 | RN09 | Total = subtotal − desconto + frete. O subtotal de um item é preço unitário × quantidade, com o preço do produto no momento da criação do pedido. Valores monetários em `BigDecimal`, com 2 casas e arredondamento `HALF_UP` em cada cálculo | — |
 | RN10 | Não é possível criar pedido a partir de carrinho vazio | 422 |
 | RN11 | Só é possível cancelar pedido com status `AGUARDANDO_PAGAMENTO`. O cancelamento devolve as quantidades ao estoque | 422 |
+
+Detalhamento das regras:
+
+- Incluir no carrinho um produto que já está nele soma a quantidade no item existente, que mantém sua posição. RN02 e RN03 valem sobre a soma. [A confirmar com o João]
+- O carrinho mostra o preço atual de cada produto, lido a cada consulta; o preço só é congelado no pedido (RN09). [A confirmar com o João]
+- Ao criar o pedido, o carrinho é esvaziado. Ele pode receber novos itens, e um novo pedido do mesmo carrinho sem itens cai na RN10. [A confirmar com o João]
+- Cadastrar um SKU já existente é recusado com 422. [A confirmar com o João]
+- A RN01 vale só para a inclusão no carrinho; a criação do pedido não confere de novo se o produto está ativo.
+- A cotação de frete é só uma simulação: produto inexistente gera 404, mas RN01 e RN03 não se aplicam. Itens com o mesmo `produtoId` são somados.
+- No pedido, o frete usa a UF do endereço de entrega, e a RN07 usa o subtotal antes do desconto.
+- RN05: "quilo iniciado" é o peso total em quilos arredondado para cima (1.001 g contam como 2 kg). RN06: o fator 1,5 incide sobre a soma da base com o adicional. RN07: com frete grátis, `valor` é 0,00 e o prazo não muda.
+- RN08: o código do cupom precisa ser exato, diferenciando maiúsculas de minúsculas.
+- Preço com mais de 2 casas decimais no cadastro é arredondado com `HALF_UP` (RN09), em vez de recusado.
 
 ### Categorias de mudança e onde elas quebram um teste
 
@@ -186,7 +206,8 @@ Uma mudança que não quebra nenhum teste fica fora do experimento, porque não 
 - Nenhum campo de data ou hora. O prazo de entrega é dado em dias. Se uma data se tornar necessária, ela vem de um `java.time.Clock` injetado, fixo nos testes.
 - Nada aleatório: sem UUID gerado e com cupons fixos.
 - Listas com ordem explícita: produtos por `sku`, itens de carrinho e de pedido pela ordem de inclusão.
-- Os testes não assumem IDs gerados pelo banco: leem o ID da resposta. As fixtures usam IDs fixos numa faixa separada da gerada pelo banco.
+- Os testes não assumem IDs gerados pelo banco: leem o ID da resposta. As fixtures usam IDs fixos de 1 a 999, e o banco gera IDs a partir de 1000 (`START WITH 1000` no `schema.sql`). [A confirmar com o João]
+- Os `campos` das respostas de erro saem ordenados pelo caminho do campo, porque o Bean Validation não garante a ordem das violações.
 - Mensagens de erro com texto explícito, sem depender do idioma da máquina.
 - Valores monetários sempre em `BigDecimal`, nunca em `double`.
 
