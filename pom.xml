@@ -6,7 +6,7 @@
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
         <version>4.1.1</version>
-        <relativePath/> <!-- lookup parent from repository -->
+        <relativePath/>
     </parent>
     <groupId>br.edu</groupId>
     <artifactId>rest-test-healing-sut</artifactId>
@@ -15,41 +15,38 @@
     <description>API cobaia de e-commerce usada como objeto do experimento de manutenção de testes de APIs REST com agentes de IA</description>
 
     <properties>
-        <java.version>25</java.version>
-        <!-- A linha 3.x do springdoc acompanha o Spring Boot 4; a 3.1.0 passou a usar o Spring Boot 4.1.0. -->
+        <java.version>21</java.version>
         <springdoc.version>3.1.1</springdoc.version>
     </properties>
 
     <dependencies>
-        <!-- Camada web (Spring MVC + Jackson). -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
-        <!-- Validação dos corpos de requisição (Bean Validation). -->
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
-        <!-- Persistência com JPA sobre o H2 em memória. -->
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
-        <!-- Geração do contrato OpenAPI a partir do código e Swagger UI para consulta. -->
+
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>${springdoc.version}</version>
         </dependency>
 
-        <!-- Banco em memória: a replicação não exige servidor de banco. -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <!-- Reinício automático durante o desenvolvimento; não entra no jar final nem nos testes. -->
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-devtools</artifactId>
@@ -57,7 +54,6 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- Testes de API com MockMvc. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-webmvc-test</artifactId>
