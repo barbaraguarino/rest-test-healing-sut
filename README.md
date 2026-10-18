@@ -1,10 +1,10 @@
-# rest-test-healing-sut
+# Rest Test Healing (API cobaia)
 
 API REST de e-commerce (produto, carrinho, frete e pedido) em Java com Spring Boot, construída como **API cobaia** do projeto "Manutenção de Testes de APIs REST usando Agentes de IA", da disciplina IA Generativa para Engenharia de Software (2026.2).
 
 A API é o **objeto do experimento**: sobre ela são injetadas mudanças controladas, e os agentes de IA tentam reparar os testes que quebram. Ela não é um sistema de produção.
 
-Este documento traz o guia de reprodução (como rodar a API, a suíte de testes e as execuções contra testes instáveis, e como o contrato OpenAPI foi gerado) e a especificação a partir da qual a API foi implementada.
+Este documento descreve como rodar a API, a suíte de testes e as execuções contra testes instáveis, como o contrato OpenAPI foi gerado e o que a API faz: entidades, endpoints, erros e regras de negócio.
 
 ## Guia de reprodução
 
@@ -23,6 +23,18 @@ Os passos partem de um clone limpo e são dados de dois jeitos: pelo IntelliJ ID
 - **Git.**
 - **Maven:** não precisa ser instalado. Na primeira execução, o `./mvnw` (ou `mvnw.cmd`, no Windows) baixa o Maven 3.10.0 e as dependências, o que exige acesso à internet.
 - **IntelliJ IDEA** (opcional): o projeto foi desenvolvido na versão paga, que traz o HTTP Client usado pelos arquivos de `http/`.
+
+### Versões e ambiente
+
+| Item | Versão | Observação |
+|---|---|---|
+| Java | 21 | Versão LTS ([Oracle Java SE Support Roadmap](https://www.oracle.com/java/technologies/java-se-support-roadmap.html)). O Spring Boot 4.1.1 aceita do Java 17 ao 26 ([System Requirements](https://docs.spring.io/spring-boot/system-requirements.html)) |
+| Spring Boot | 4.1.1 | Lançado em 20/08/2026 ([Spring Blog](https://spring.io/blog/2026/08/20/spring-boot-4-1-1-available-now/)); usa Jackson 3 |
+| springdoc-openapi | 3.1.1 | A linha 3.x acompanha o Spring Boot 4; a 3.1.0 passou a usar o Spring Boot 4.1.0 ([releases](https://github.com/springdoc/springdoc-openapi/releases)) |
+| Maven | 3.10.0, via `./mvnw` | Não precisa ser instalado; o Spring Boot exige 3.6.3 ou superior |
+| JUnit Jupiter | 6.0.3 | Versão gerenciada pelo Spring Boot 4.1.1 ([`gradle.properties` do Spring Boot v4.1.1](https://github.com/spring-projects/spring-boot/blob/v4.1.1/gradle.properties)), sem versão fixada no `pom.xml` |
+| Banco | H2 em memória | Sem servidor de banco |
+| Autenticação | nenhuma | Todos os endpoints são públicos |
 
 ### Obter o código
 
@@ -62,7 +74,7 @@ A suíte tem uma classe de teste por controller, no mesmo pacote da classe testa
 
 ### Execuções contra testes instáveis
 
-Teste instável é o que passa ou falha sem nenhuma mudança no código. No experimento, uma falha assim seria confundida com a quebra provocada pela mudança injetada. Testes instáveis ficaram fora do escopo, com uma mitigação: a suíte é executada várias vezes antes do experimento, e um teste que oscile é corrigido ou excluído.
+Teste instável é o que passa ou falha sem nenhuma mudança no código. Antes do experimento, a suíte foi executada várias vezes, em ordem fixa e em ordens diferentes, para verificar que nenhum teste oscila.
 
 O arquivo `src/test/resources/junit-platform.properties` faz o JUnit executar classes e métodos em ordem aleatória, com a semente 1. A ordem é embaralhada, o que revela testes que dependem de outros terem rodado antes, mas é a mesma a cada execução, o que mantém as execuções reproduzíveis. A semente pode ser trocada pela propriedade `junit.jupiter.execution.order.random.seed`, que tem precedência sobre o arquivo.
 
@@ -73,16 +85,12 @@ O protocolo tem duas rodadas:
 | A. Ordem fixa (semente 1), 20 repetições | Instabilidade que não depende da ordem | Na configuração de execução dos testes, **Modify options → Repeat → N times**: 20 | `for i in $(seq 1 20); do ./mvnw -q test \|\| break; done` |
 | B. 10 ordens diferentes (sementes 2 a 11), uma execução cada | Dependência de ordem entre testes | Em **VM options**: `-ea -Djunit.jupiter.execution.order.random.seed=2`, trocando o número até 11 | `for s in $(seq 2 11); do ./mvnw -q test -Djunit.jupiter.execution.order.random.seed=$s \|\| break; done` |
 
-Por que esses números: um teste que falha ao acaso com probabilidade $p$ por execução falha pelo menos uma vez em $n$ execuções com probabilidade $1 - (1-p)^n$. Com $n = 20$, essa chance é de cerca de 64% para $p = 0{,}05$, 88% para $p = 0{,}10$ e 99% para $p = 0{,}20$. O protocolo pega a instabilidade frequente, mas não a rara, o que é coerente com tratá-la como mitigação, e não como detecção exaustiva.
-
 Resultado em 11/10/2026 (Ubuntu 24.04, OpenJDK 21, IntelliJ IDEA, JUnit Jupiter 6.0.3):
 
 | Rodada | Execuções | Falhas |
 |---|---|---|
 | A. Ordem fixa, 20 repetições | 1.300 | 0 |
 | B. Sementes 2 a 11 | 650 | 0 |
-
-O protocolo é repetido sempre que a suíte mudar antes de ser usada no experimento.
 
 ### Verificação manual
 
@@ -92,9 +100,9 @@ Com a aplicação rodando, abra `http/verificacao-manual.http` no IntelliJ IDEA 
 
 O arquivo `docs/openapi.json` é o contrato declarado da API: o que ela promete aos clientes, independente do que o código faz.
 
-**Como foi gerado.** Em 11/10/2026, com a aplicação rodando nesta versão do código, o contrato foi obtido de `GET http://localhost:8080/v3/api-docs` (springdoc-openapi 3.1.1) e salvo no repositório. As propriedades `springdoc.writer-with-order-by-keys` e `springdoc.writer-with-default-pretty-printer` deixam as chaves em ordem alfabética e o JSON indentado, e o servidor fica fixo em `/` (`OpenApiConfig`). Assim, duas gerações a partir do mesmo código produzem o mesmo arquivo, e as diferenças entre versões ficam legíveis. Depois de gerado, o arquivo foi conferido contra esta especificação: campos e tipos de cada schema, campos obrigatórios, enums, restrições de formato, códigos de sucesso, parâmetros e ausência de schemas de erro e de limites de negócio.
+**Como foi gerado.** Em 11/10/2026, com a aplicação rodando nesta versão do código, o contrato foi obtido de `GET http://localhost:8080/v3/api-docs` (springdoc-openapi 3.1.1) e salvo no repositório. As propriedades `springdoc.writer-with-order-by-keys` e `springdoc.writer-with-default-pretty-printer` deixam as chaves em ordem alfabética e o JSON indentado, e o servidor fica fixo em `/` (`OpenApiConfig`). Assim, duas gerações a partir do mesmo código produzem o mesmo arquivo. Depois de gerado, o arquivo foi conferido contra a especificação deste documento: campos e tipos de cada schema, campos obrigatórios, enums, restrições de formato, códigos de sucesso, parâmetros e ausência de schemas de erro e de limites de negócio.
 
-**Como regenerar.** O contrato não é regenerado no build: ele só muda por decisão explícita, quando o contrato evolui de propósito. Com a aplicação rodando:
+**Como regenerar.** O contrato não é regenerado no build. Com a aplicação rodando:
 
 - No IntelliJ IDEA: abra `http/gerar-contrato.http` e execute a requisição. A resposta sobrescreve `docs/openapi.json`.
 - No terminal: `curl -s http://localhost:8080/v3/api-docs -o docs/openapi.json`.
@@ -133,51 +141,6 @@ rest-test-healing-sut/
 ```
 
 ## Especificação da cobaia
-
-### Papel no experimento
-
-A API atende aos dois agentes do projeto:
-
-- **Agente 1** repara o código de teste quando o contrato OpenAPI muda de forma explícita, em quatro categorias: renomeação de campo, remoção de campo, alteração de tipo de campo e campo obrigatório novo. A API precisa permitir as quatro, e cada mudança precisa quebrar pelo menos um teste.
-- **Agente 2** repara fixtures de teste que ficaram desatualizadas em relação a uma mudança de regra de negócio, sem mudança de schema. A API precisa ter regras de negócio com valores que podem mudar sem alterar o contrato.
-
-Daí vêm três exigências, detalhadas nas seções seguintes:
-
-1. **Contrato declarado separado do código.** O arquivo `docs/openapi.json` registra o que a API promete; o código registra o que ela faz. Numa mudança legítima, os dois mudam juntos. Numa regressão, o código muda e o contrato não. Por isso o contrato não é regenerado automaticamente a cada build: ele é gerado uma vez e depois só muda por decisão explícita.
-2. **Regras de negócio fora do contrato.** As regras ficam como constantes no código de domínio, nunca como anotações de validação (como `@Max(10)`). O springdoc publica essas anotações no contrato, e mudar a regra viraria uma mudança de schema.
-3. **Determinismo.** Um teste que falha sem relação com a mudança injetada contamina o experimento.
-
-### Versões e ambiente
-
-| Item | Versão | Observação |
-|---|---|---|
-| Java | 21 | Versão LTS ([Oracle Java SE Support Roadmap](https://www.oracle.com/java/technologies/java-se-support-roadmap.html)), disponível na máquina de desenvolvimento. O código não usa recurso do Java 22 ou superior. Compatível com o Spring Boot 4.1.1, que aceita do Java 17 ao 26 ([System Requirements](https://docs.spring.io/spring-boot/system-requirements.html)) |
-| Spring Boot | 4.1.1 | Lançado em 20/08/2026 ([Spring Blog](https://spring.io/blog/2026/08/20/spring-boot-4-1-1-available-now/)); usa Jackson 3 |
-| springdoc-openapi | 3.1.1 | A linha 3.x acompanha o Spring Boot 4; a 3.1.0 passou a usar o Spring Boot 4.1.0 ([releases](https://github.com/springdoc/springdoc-openapi/releases)) |
-| Maven | 3.10.0, via `./mvnw` | Não precisa ser instalado; o Spring Boot exige 3.6.3 ou superior |
-| JUnit Jupiter | 6.0.3 | Versão gerenciada pelo Spring Boot 4.1.1 ([`gradle.properties` do Spring Boot v4.1.1](https://github.com/spring-projects/spring-boot/blob/v4.1.1/gradle.properties)), sem versão fixada no `pom.xml` |
-| Banco | H2 em memória | Sem servidor de banco |
-
-### Decisões técnicas
-
-| Decisão | Por quê | Alternativas descartadas |
-|---|---|---|
-| Sem Spring Security | Com ela, todo endpoint exige autenticação por padrão, e falhas 401 seriam ruído. Mudanças de autenticação não estão entre as categorias estudadas | Manter com todos os endpoints liberados |
-| Só H2 em memória | A replicação não depende de um servidor de banco | PostgreSQL |
-| Schema explícito em `src/main/resources/schema.sql`, validado pelo Hibernate (`spring.jpa.hibernate.ddl-auto=validate`) | O schema não evolui no experimento: as mudanças de contrato ficam nos DTOs, e as de regra de negócio não mudam o schema. Um arquivo SQL explícito basta, e as fixtures em SQL têm um schema legível como referência | Flyway (versionamento de schema sem uso aqui); schema gerado pelo Hibernate (implícito) |
-| Sem Lombok; DTOs como records e entidades JPA com métodos escritos | Os agentes leem o código-fonte, e métodos gerados por anotação não aparecem nele | Lombok |
-| DTOs separados para requisição e resposta | Permite mudar o contrato só da requisição ou só da resposta | Um DTO por recurso |
-| Contrato gerado pelo springdoc a partir do código, uma vez, e salvo em `docs/openapi.json` como contrato declarado | Gerar evita divergências entre o código e um contrato escrito à mão. Salvar o retrato mantém o contrato independente do código, o que é necessário para injetar regressões | Contrato escrito à mão; contrato regenerado a cada build |
-| Desserialização estrita: campo desconhecido no JSON da requisição gera 400 (`spring.jackson.deserialization.fail-on-unknown-properties=true`) | Sem isso, um teste que ainda envia um campo renomeado ou removido continua passando, porque a API ignora o campo | Comportamento tolerante (campo desconhecido ignorado) |
-| Contrato só com as respostas de sucesso; o tratador global de erros não usa `@ResponseStatus` | Com `@ResponseStatus`, o springdoc anexaria todas as respostas de erro a todas as operações, inclusive um 404 em `POST /produtos`. As categorias de mudança do Agente 1 atuam só nos corpos de sucesso | Declarar os erros de cada operação com `@ApiResponse` (completo, mas enche os controllers de anotações) |
-| Mensagens das anotações de validação escritas no atributo `message` (por exemplo, `@NotNull(message = "é obrigatório")`), a partir de constantes num único arquivo | As mensagens padrão do Bean Validation mudam com o idioma da máquina. Escritas no código, ficam visíveis para os agentes | Arquivo `ValidationMessages.properties` |
-| Testes de API com MockMvc (`@SpringBootTest` + `@AutoConfigureMockMvc`) | A requisição passa por todo o Spring MVC (conversão do JSON, validação e tratamento de erros), então as quebras de contrato aparecem como num servidor real. Não abre porta e é rápido. É uma API de teste consolidada e muito documentada, o que importa porque os agentes vão reparar esse código | RestTestClient (recente, do Spring Framework 7); REST Assured com servidor real (dependência a mais e limpeza manual do banco entre testes); `@WebMvcTest` com os services simulados por `@MockitoBean` (as regras de negócio não rodariam, e uma mudança de regra não quebraria nenhum teste) |
-| Testes no formato de testes de controller de um projeto real em Spring Boot: uma classe por controller, no mesmo pacote da classe testada, `@Nested` por operação, métodos `shouldReturn…When…` e `@DisplayName` "Deve …" | A suíte é o objeto que os agentes reparam. Testes num formato artificial reduziriam a validade externa do experimento | Pacote separado só para os testes de API, com nomes de método em português |
-| Requisição escrita como JSON literal no teste, e não serializada a partir dos DTOs | Com os DTOs, renomear um campo de requisição mudaria o teste junto, e a quebra não apareceria | `ObjectMapper` com os records de requisição |
-| Campos numéricos da resposta verificados com matcher (`value(is(6))`, `value(decimal("51.00"))`); texto e booleano com `value(…)` | `jsonPath(…).value(6)` converte o texto `"6"` no número 6 antes de comparar, e a mudança de um campo de número para texto não quebraria o teste | `value(…)` para todos os tipos |
-| Regras de negócio com limite testadas nos dois lados do limite, com asserção só do resultado da regra (aceito ou recusado, frete grátis ou não) | Uma mudança no valor da regra, para mais ou para menos, quebra um dos dois testes, e o reparo fica na fixture, sem exigir mudança nas asserções | Asserções sobre valores calculados a partir dos dados da fixture |
-| Testes em ordem aleatória com semente fixa (`junit-platform.properties`) | Revela dependência de ordem entre testes e mantém as execuções reproduzíveis | Ordem padrão do JUnit; semente variável, que só aparece num nível de log desligado por padrão |
-| Saída do `/v3/api-docs` com chaves em ordem alfabética e indentada (`springdoc.writer-with-order-by-keys` e `springdoc.writer-with-default-pretty-printer`) | O retrato salvo sai igual a cada geração, e as diferenças entre versões do contrato ficam legíveis | Formatar o arquivo à mão depois de gerado |
 
 ### Entidades e campos
 
@@ -274,7 +237,7 @@ Em `VALIDACAO`, `campos` traz um item por violação, com o caminho do campo (`d
 
 ### Regras de negócio
 
-Os valores abaixo foram definidos para a cobaia e não representam um negócio real. Cada regra fica num único lugar do código de domínio, para que mudar uma regra seja uma alteração pontual.
+Os valores abaixo foram definidos para a cobaia e não representam um negócio real. Cada regra fica num único lugar do código de domínio, como constante, e não como anotação de validação, por isso não aparece no contrato.
 
 | ID | Regra | Violação |
 |---|---|---|
@@ -292,10 +255,10 @@ Os valores abaixo foram definidos para a cobaia e não representam um negócio r
 
 Detalhamento das regras:
 
-- Incluir no carrinho um produto que já está nele soma a quantidade no item existente, que mantém sua posição. RN02 e RN03 valem sobre a soma. [A confirmar com o João]
-- O carrinho mostra o preço atual de cada produto, lido a cada consulta; o preço só é congelado no pedido (RN09). [A confirmar com o João]
-- Ao criar o pedido, o carrinho é esvaziado. Ele pode receber novos itens, e um novo pedido do mesmo carrinho sem itens cai na RN10. [A confirmar com o João]
-- Cadastrar um SKU já existente é recusado com 422. [A confirmar com o João]
+- Incluir no carrinho um produto que já está nele soma a quantidade no item existente, que mantém sua posição. RN02 e RN03 valem sobre a soma.
+- O carrinho mostra o preço atual de cada produto, lido a cada consulta; o preço só é congelado no pedido (RN09).
+- Ao criar o pedido, o carrinho é esvaziado. Ele pode receber novos itens, e um novo pedido do mesmo carrinho sem itens cai na RN10.
+- Cadastrar um SKU já existente é recusado com 422.
 - A RN01 vale só para a inclusão no carrinho; a criação do pedido não confere de novo se o produto está ativo.
 - A cotação de frete é só uma simulação: produto inexistente gera 404, mas RN01 e RN03 não se aplicam. Itens com o mesmo `produtoId` são somados.
 - No pedido, o frete usa a UF do endereço de entrega, e a RN07 usa o subtotal antes do desconto.
@@ -303,45 +266,24 @@ Detalhamento das regras:
 - RN08: o código do cupom precisa ser exato, diferenciando maiúsculas de minúsculas.
 - Preço com mais de 2 casas decimais no cadastro é arredondado com `HALF_UP` (RN09), em vez de recusado.
 
-### Categorias de mudança e onde elas quebram um teste
+### Características da suíte de testes
 
-Uma mudança que não quebra nenhum teste fica fora do experimento, porque não há o que reparar. A tabela indica onde aplicar cada categoria para que a quebra seja garantida.
-
-| Categoria | Onde aplicar | Como o teste falha | Onde não quebra (evitar) |
-|---|---|---|---|
-| Renomeação de campo | Campo da resposta verificado por algum teste | O campo com o nome antigo não existe mais e a asserção falha | Parâmetros de path e de query. Robles et al. (2023) classificam a renomeação de parâmetro como não *breaking*: renomear um parâmetro de path muda só o nome na especificação, e um parâmetro de query desconhecido é ignorado. Por isso a renomeação é aplicada **só a campos do corpo** |
-| | Campo da requisição | O teste envia o nome antigo, que é desconhecido: 400 | — |
-| Remoção de campo | Campo da resposta verificado por algum teste | A asserção sobre o campo falha | Campo que nenhum teste verifica |
-| | Campo da requisição | O teste envia um campo desconhecido: 400 | — |
-| Alteração de tipo de campo | Campo da resposta: número para texto, booleano para enum, objeto para texto | A asserção de valor ou de tipo falha | — |
-| | Campo da requisição, entre tipos JSON que não se convertem: número e objeto, booleano e enum, texto e lista | 400 | Número para texto na requisição: o Jackson pode converter `10` em `"10"`, e o teste continua passando |
-| Campo obrigatório novo | Requisição, com `@NotNull` ou `@NotBlank`, que o springdoc publica como `required` | O teste não envia o campo: 400 | Resposta: um campo novo na resposta não quebra um teste que verifica campo a campo |
-
-### Requisitos para a suíte de testes
-
-- **Testes caixa-preta.** O JSON da requisição fica escrito como texto no próprio teste, e a resposta é lida pelo nome dos campos (`jsonPath`). Os testes não usam os DTOs nem as entidades da aplicação: se usassem, renomear um campo no DTO mudaria o teste junto e a quebra não apareceria.
-- **Asserções campo a campo,** nunca comparação do JSON inteiro. A comparação inteira quebraria com qualquer campo novo na resposta, o que não é uma das categorias.
+- **Testes caixa-preta com MockMvc** (`@SpringBootTest` + `@AutoConfigureMockMvc`): a requisição passa por todo o Spring MVC, sem abrir porta. O JSON da requisição fica escrito como texto no próprio teste, e a resposta é lida pelo nome dos campos (`jsonPath`). Os testes não usam os DTOs nem as entidades da aplicação.
+- **Formato:** uma classe por controller, no mesmo pacote da classe testada, `@Nested` por operação, métodos `shouldReturn…When…` e `@DisplayName` "Deve …".
+- **Asserções campo a campo,** nunca comparação do JSON inteiro. Campos numéricos com matcher (`value(is(6))`, `value(decimal("51.00"))`); texto e booleano com `value(…)`.
+- **Regras de negócio com limite** testadas nos dois lados do limite, com asserção só do resultado da regra (aceito ou recusado, frete grátis ou não).
 - **Cobertura do contrato.** Todo campo da resposta é verificado em pelo menos um teste, e todo campo da requisição é enviado em pelo menos um teste. A correspondência está em `docs/matriz-de-cobertura.md`.
-- **Erros verificados por `codigo` e `campos`,** não pelas mensagens padrão do Bean Validation, que mudam com o idioma da máquina.
+- **Erros verificados por `codigo` e `campos`,** e não pelas mensagens.
 - **Isolamento.** Antes de cada teste, um script SQL limpa o banco e outro carrega a fixture do teste (`@Sql`). Os testes não dependem da ordem de execução.
-- **Fixtures em arquivos SQL** em `src/test/resources/fixtures/`, separadas do código Java dos testes, organizadas por recurso e, para as regras de negócio, com um arquivo por regra em `regras/`. Assim, o setup não depende do contrato da API, e uma mudança de contrato em `POST /produtos` não quebra todos os testes que precisam de um produto.
+- **Fixtures em arquivos SQL** em `src/test/resources/fixtures/`, separadas do código Java dos testes, organizadas por recurso e, para as regras de negócio, com um arquivo por regra em `regras/`.
 
 ### Determinismo
 
-- Nenhum campo de data ou hora. O prazo de entrega é dado em dias. Se uma data se tornar necessária, ela vem de um `java.time.Clock` injetado, fixo nos testes.
+- Nenhum campo de data ou hora. O prazo de entrega é dado em dias.
 - Nada aleatório: sem UUID gerado e com cupons fixos.
 - Listas com ordem explícita: produtos por `sku`, itens de carrinho e de pedido pela ordem de inclusão.
-- Os testes não assumem IDs gerados pelo banco: leem o ID da resposta. As fixtures usam IDs fixos de 1 a 999, e o banco gera IDs a partir de 1000 (`START WITH 1000` no `schema.sql`). [A confirmar com o João]
+- Os testes não assumem IDs gerados pelo banco: leem o ID da resposta. As fixtures usam IDs fixos de 1 a 999, e o banco gera IDs a partir de 1000 (`START WITH 1000` no `schema.sql`).
 - Os `campos` das respostas de erro saem ordenados pelo caminho do campo, porque o Bean Validation não garante a ordem das violações.
 - Mensagens de erro com texto explícito, sem depender do idioma da máquina.
 - Valores monetários sempre em `BigDecimal`, nunca em `double`.
 - Testes executados em ordem aleatória com semente fixa, e a suíte executada várias vezes antes do experimento, em ordem fixa e em ordens diferentes.
-
-### Pendências
-
-- Formato das fixtures (arquivos SQL) e valores das regras de negócio. [A confirmar com o João]
-- Se o Agente 2 repara também os valores esperados das asserções nas regras de taxa (bases da RN04, adicional da RN05, RN06, percentual da RN08, arredondamento da RN09), ou se o catálogo de mudanças dele usa só regras de limite. [A confirmar com o João]
-
-### Referências
-
-ROBLES, N.; POTES, N.; GARCÉS, K.; CANOVAS IZQUIERDO, J. L.; CABOT, J. Exploratory Analysis of the Structural Evolution of public REST APIs. In: CONGRESSO IBERO-AMERICANO EM ENGENHARIA DE SOFTWARE (CIbSE), 2023. **Anais** [...]. p. 92-106. DOI: https://doi.org/10.5753/cibse.2023.24695.
