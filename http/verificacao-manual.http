@@ -1,0 +1,746 @@
+# Verificação manual da API cobaia pelo HTTP Client do IntelliJ IDEA.
+# Pré-requisito: aplicação rodando em localhost:8080.
+# Execute as requisições de cima para baixo: os IDs usados adiante são salvos pelos handlers das
+# requisições anteriores. Os SKUs são aleatórios para o arquivo poder ser executado de novo sem
+# reiniciar a aplicação.
+
+@host = http://localhost:8080
+
+### Produto: criar livro (sucesso)
+POST {{host}}/produtos
+Content-Type: application/json
+
+{
+  "sku": "LIV-{{$random.alphanumeric(8)}}",
+  "nome": "Livro de Teste",
+  "descricao": "Livro usado na verificação manual",
+  "preco": 120.00,
+  "categoria": "LIVROS",
+  "ativo": true,
+  "estoque": 5,
+  "pesoGramas": 800,
+  "dimensoes": {"alturaCm": 20, "larguraCm": 14, "comprimentoCm": 3},
+  "tags": ["promo", "novo"]
+}
+
+> {%
+    client.test("201 com Location /produtos/{id}", function () {
+        client.assert(response.status === 201, "status " + response.status);
+        client.assert(response.headers.valueOf("Location") === "/produtos/" + response.body.id,
+            "Location " + response.headers.valueOf("Location"));
+    });
+    client.test("campos da resposta", function () {
+        var p = response.body;
+        client.assert(p.nome === "Livro de Teste" && p.preco === 120 && p.categoria === "LIVROS", "nome/preco/categoria");
+        client.assert(p.ativo === true && p.estoque === 5 && p.pesoGramas === 800, "ativo/estoque/pesoGramas");
+        client.assert(p.dimensoes.alturaCm === 20 && p.dimensoes.larguraCm === 14 && p.dimensoes.comprimentoCm === 3, "dimensoes");
+        client.assert(JSON.stringify(p.tags) === '["promo","novo"]', "tags fora da ordem enviada: " + JSON.stringify(p.tags));
+    });
+    client.global.set("livroId", String(response.body.id));
+    client.global.set("livroSku", response.body.sku);
+%}
+
+### Produto: criar produto inativo, sem descrição e sem tags (sucesso)
+POST {{host}}/produtos
+Content-Type: application/json
+
+{
+  "sku": "ELE-{{$random.alphanumeric(8)}}",
+  "nome": "Fone Inativo",
+  "preco": 50.00,
+  "categoria": "ELETRONICOS",
+  "ativo": false,
+  "estoque": 10,
+  "pesoGramas": 300,
+  "dimensoes": {"alturaCm": 5, "larguraCm": 5, "comprimentoCm": 5}
+}
+
+> {%
+    client.test("201, descricao null e tags vazia", function () {
+        client.assert(response.status === 201, "status " + response.status);
+        client.assert(response.body.descricao === null, "descricao " + response.body.descricao);
+        client.assert(Array.isArray(response.body.tags) && response.body.tags.length === 0, "tags " + JSON.stringify(response.body.tags));
+    });
+    client.global.set("inativoId", String(response.body.id));
+%}
+
+### Produto: criar produto com estoque 2 (usado nas regras de estoque e frete)
+POST {{host}}/produtos
+Content-Type: application/json
+
+{
+  "sku": "CAS-{{$random.alphanumeric(8)}}",
+  "nome": "Luminária",
+  "preco": 30.00,
+  "categoria": "CASA",
+  "ativo": true,
+  "estoque": 2,
+  "pesoGramas": 1500,
+  "dimensoes": {"alturaCm": 40, "larguraCm": 20, "comprimentoCm": 20}
+}
+
+> {%
+    client.test("201", function () {
+        client.assert(response.status === 201, "status " + response.status);
+    });
+    client.global.set("escassoId", String(response.body.id));
+%}
+
+### Produto: criar produto barato (usado na condição do cupom)
+POST {{host}}/produtos
+Content-Type: application/json
+
+{
+  "sku": "VES-{{$random.alphanumeric(8)}}",
+  "nome": "Meia",
+  "preco": 10.00,
+  "categoria": "VESTUARIO",
+  "ativo": true,
+  "estoque": 50,
+  "pesoGramas": 100,
+  "dimensoes": {"alturaCm": 2, "larguraCm": 10, "comprimentoCm": 20}
+}
+
+> {%
+    client.test("201", function () {
+        client.assert(response.status === 201, "status " + response.status);
+    });
+    client.global.set("baratoId", String(response.body.id));
+%}
+
+### Produto: buscar por ID (sucesso)
+GET {{host}}/produtos/{{livroId}}
+
+> {%
+    client.test("200 com o produto pedido", function () {
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(response.body.id === Number(client.global.get("livroId")), "id " + response.body.id);
+    });
+%}
+
+### Produto: listar por categoria (sucesso)
+GET {{host}}/produtos?categoria=LIVROS
+
+> {%
+    client.test("200, só LIVROS, ordenada por sku, contém o livro", function () {
+        var lista = response.body;
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(lista.every(function (p) { return p.categoria === "LIVROS"; }), "categoria diferente de LIVROS");
+        for (var i = 1; i < lista.length; i++) {
+            client.assert(lista[i - 1].sku <= lista[i].sku, "fora da ordem de sku: " + lista[i - 1].sku + " > " + lista[i].sku);
+        }
+        client.assert(lista.some(function (p) { return p.id === Number(client.global.get("livroId")); }), "livro ausente");
+    });
+%}
+
+### Produto: listar sem categoria inclui os inativos (sucesso)
+GET {{host}}/produtos
+
+> {%
+    client.test("200 e contém o produto inativo", function () {
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(response.body.some(function (p) { return p.id === Number(client.global.get("inativoId")); }), "inativo ausente");
+    });
+%}
+
+### Carrinho: criar (sucesso)
+POST {{host}}/carrinhos
+
+> {%
+    client.test("201, vazio, subtotal 0", function () {
+        client.assert(response.status === 201, "status " + response.status);
+        client.assert(response.body.itens.length === 0 && response.body.subtotal === 0, JSON.stringify(response.body));
+    });
+    client.global.set("carrinhoId", String(response.body.id));
+%}
+
+### Carrinho: incluir 1 livro (sucesso)
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}, "quantidade": 1}
+
+> {%
+    client.test("200, subtotal 120,00", function () {
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(response.body.subtotal === 120, "subtotal " + response.body.subtotal);
+    });
+%}
+
+### Carrinho: incluir o mesmo livro de novo soma no item existente
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}, "quantidade": 1}
+
+> {%
+    client.test("um item só, quantidade 2, subtotal 240,00", function () {
+        var c = response.body;
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(c.itens.length === 1 && c.itens[0].quantidade === 2, JSON.stringify(c.itens));
+        client.assert(c.subtotal === 240, "subtotal " + c.subtotal);
+    });
+%}
+
+### Carrinho: buscar (sucesso)
+GET {{host}}/carrinhos/{{carrinhoId}}
+
+> {%
+    client.test("200 com os campos do item", function () {
+        var item = response.body.itens[0];
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(item.produtoId === Number(client.global.get("livroId")), "produtoId " + item.produtoId);
+        client.assert(item.precoUnitario === 120 && item.subtotal === 240, JSON.stringify(item));
+    });
+%}
+
+### Frete: cotação PADRAO para SP com frete grátis (RN04, RN05, RN07)
+POST {{host}}/fretes/cotacao
+Content-Type: application/json
+
+{
+  "destino": {"cep": "01001000", "uf": "SP"},
+  "modalidade": "PADRAO",
+  "itens": [{"produtoId": {{livroId}}, "quantidade": 2}]
+}
+
+> {%
+    client.test("subtotal 240,00 >= 200,00 na PADRAO: frete grátis, valor 0,00, prazo 3", function () {
+        var f = response.body;
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(f.freteGratis === true && f.valor === 0 && f.prazoDias === 3, JSON.stringify(f));
+        client.assert(f.pesoTotalGramas === 1600 && f.modalidade === "PADRAO", JSON.stringify(f));
+    });
+%}
+
+### Frete: cotação EXPRESSA para AM, com produto inativo (RN04, RN05, RN06)
+POST {{host}}/fretes/cotacao
+Content-Type: application/json
+
+{
+  "destino": {"cep": "69005000", "uf": "AM"},
+  "modalidade": "EXPRESSA",
+  "itens": [{"produtoId": {{escassoId}}, "quantidade": 1}, {"produtoId": {{inativoId}}, "quantidade": 1}]
+}
+
+> {%
+    client.test("1800 g = 2 kg; (30,00 + 2 × 2,00) × 1,5 = 51,00; prazo 8 − 2 = 6", function () {
+        var f = response.body;
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(f.valor === 51 && f.prazoDias === 6 && f.freteGratis === false, JSON.stringify(f));
+        client.assert(f.pesoTotalGramas === 1800, "peso " + f.pesoTotalGramas);
+    });
+%}
+
+### Pedido: criar com cupom (sucesso, RN08 e RN09)
+POST {{host}}/pedidos
+Content-Type: application/json
+
+{
+  "carrinhoId": {{carrinhoId}},
+  "cliente": {"nome": "Ana Souza", "email": "ana@exemplo.com"},
+  "enderecoEntrega": {"logradouro": "Rua A", "numero": "10", "complemento": "Apto 1", "cidade": "São Paulo", "uf": "SP", "cep": "01001000"},
+  "modalidadeFrete": "PADRAO",
+  "cupom": "BEMVINDO10"
+}
+
+> {%
+    client.test("201 com Location /pedidos/{id}", function () {
+        client.assert(response.status === 201, "status " + response.status);
+        client.assert(response.headers.valueOf("Location") === "/pedidos/" + response.body.id,
+            "Location " + response.headers.valueOf("Location"));
+    });
+    client.test("240,00 − 24,00 + 0,00 = 216,00", function () {
+        var p = response.body;
+        client.assert(p.status === "AGUARDANDO_PAGAMENTO", "status " + p.status);
+        client.assert(p.subtotal === 240 && p.desconto === 24 && p.frete === 0 && p.total === 216, JSON.stringify(p));
+    });
+    client.test("cliente, endereço e itens", function () {
+        var p = response.body;
+        client.assert(p.cliente.nome === "Ana Souza" && p.cliente.email === "ana@exemplo.com", JSON.stringify(p.cliente));
+        client.assert(p.enderecoEntrega.uf === "SP" && p.enderecoEntrega.complemento === "Apto 1", JSON.stringify(p.enderecoEntrega));
+        client.assert(p.modalidadeFrete === "PADRAO", "modalidadeFrete " + p.modalidadeFrete);
+        var item = p.itens[0];
+        client.assert(p.itens.length === 1 && item.nomeProduto === "Livro de Teste" && item.quantidade === 2, JSON.stringify(p.itens));
+        client.assert(item.precoUnitario === 120 && item.subtotal === 240, JSON.stringify(item));
+    });
+    client.global.set("pedidoId", String(response.body.id));
+%}
+
+### Pedido: buscar (sucesso)
+GET {{host}}/pedidos/{{pedidoId}}
+
+> {%
+    client.test("200 com o pedido criado", function () {
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(response.body.total === 216, "total " + response.body.total);
+    });
+%}
+
+### Pedido: o estoque foi baixado (RN03)
+GET {{host}}/produtos/{{livroId}}
+
+> {%
+    client.test("estoque 5 − 2 = 3", function () {
+        client.assert(response.body.estoque === 3, "estoque " + response.body.estoque);
+    });
+%}
+
+### Pedido: o carrinho foi esvaziado
+GET {{host}}/carrinhos/{{carrinhoId}}
+
+> {%
+    client.test("carrinho sem itens", function () {
+        client.assert(response.body.itens.length === 0, JSON.stringify(response.body.itens));
+    });
+%}
+
+### Pedido: cancelar (sucesso, RN11)
+POST {{host}}/pedidos/{{pedidoId}}/cancelamento
+
+> {%
+    client.test("200, status CANCELADO", function () {
+        client.assert(response.status === 200, "status " + response.status);
+        client.assert(response.body.status === "CANCELADO", "status " + response.body.status);
+    });
+%}
+
+### Pedido: o cancelamento devolveu o estoque (RN11)
+GET {{host}}/produtos/{{livroId}}
+
+> {%
+    client.test("estoque de volta a 5", function () {
+        client.assert(response.body.estoque === 5, "estoque " + response.body.estoque);
+    });
+%}
+
+### Erro: campo desconhecido
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}, "quantidade": 1, "campoExtra": 1}
+
+> {%
+    client.test("400 JSON_INVALIDO apontando campoExtra", function () {
+        client.assert(response.status === 400, "status " + response.status);
+        client.assert(response.body.codigo === "JSON_INVALIDO", "codigo " + response.body.codigo);
+        client.assert(response.body.campos.length === 1 && response.body.campos[0].campo === "campoExtra", JSON.stringify(response.body.campos));
+    });
+%}
+
+### Erro: tipo incompatível
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}, "quantidade": "abc"}
+
+> {%
+    client.test("400 JSON_INVALIDO apontando quantidade", function () {
+        client.assert(response.status === 400, "status " + response.status);
+        client.assert(response.body.codigo === "JSON_INVALIDO", "codigo " + response.body.codigo);
+        client.assert(response.body.campos.length === 1 && response.body.campos[0].campo === "quantidade", JSON.stringify(response.body.campos));
+    });
+%}
+
+### Erro: obrigatório ausente
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}}
+
+> {%
+    client.test("400 VALIDACAO com campos = [quantidade]", function () {
+        client.assert(response.status === 400, "status " + response.status);
+        client.assert(response.body.codigo === "VALIDACAO", "codigo " + response.body.codigo);
+        client.assert(JSON.stringify(response.body.campos) === '[{"campo":"quantidade","mensagem":"é obrigatório"}]',
+            JSON.stringify(response.body.campos));
+    });
+%}
+
+### Erro: obrigatórios ausentes em objeto aninhado, campos ordenados
+POST {{host}}/produtos
+Content-Type: application/json
+
+{
+  "sku": "LIV-{{$random.alphanumeric(8)}}",
+  "preco": 10.00,
+  "categoria": "LIVROS",
+  "ativo": true,
+  "estoque": 1,
+  "pesoGramas": 100,
+  "dimensoes": {"larguraCm": 10, "comprimentoCm": 10}
+}
+
+> {%
+    client.test("400 VALIDACAO com campos = [dimensoes.alturaCm, nome]", function () {
+        client.assert(response.status === 400, "status " + response.status);
+        client.assert(response.body.codigo === "VALIDACAO", "codigo " + response.body.codigo);
+        var nomes = response.body.campos.map(function (c) { return c.campo; });
+        client.assert(JSON.stringify(nomes) === '["dimensoes.alturaCm","nome"]', JSON.stringify(nomes));
+    });
+%}
+
+### Erro: parâmetro de query com valor inválido
+GET {{host}}/produtos?categoria=FOO
+
+> {%
+    client.test("400 VALIDACAO apontando categoria", function () {
+        client.assert(response.status === 400, "status " + response.status);
+        client.assert(response.body.codigo === "VALIDACAO", "codigo " + response.body.codigo);
+        client.assert(response.body.campos[0].campo === "categoria", JSON.stringify(response.body.campos));
+    });
+%}
+
+### Erro: recurso inexistente
+GET {{host}}/produtos/999999999
+
+> {%
+    client.test("404 RECURSO_NAO_ENCONTRADO", function () {
+        client.assert(response.status === 404, "status " + response.status);
+        client.assert(response.body.codigo === "RECURSO_NAO_ENCONTRADO", "codigo " + response.body.codigo);
+        client.assert(response.body.campos.length === 0, JSON.stringify(response.body.campos));
+    });
+%}
+
+### Erro: rota inexistente
+GET {{host}}/rota-que-nao-existe
+
+> {%
+    client.test("404 RECURSO_NAO_ENCONTRADO", function () {
+        client.assert(response.status === 404, "status " + response.status);
+        client.assert(response.body.codigo === "RECURSO_NAO_ENCONTRADO", "codigo " + response.body.codigo);
+    });
+%}
+
+### Regra: SKU duplicado
+POST {{host}}/produtos
+Content-Type: application/json
+
+{
+  "sku": "{{livroSku}}",
+  "nome": "Livro Repetido",
+  "preco": 10.00,
+  "categoria": "LIVROS",
+  "ativo": true,
+  "estoque": 1,
+  "pesoGramas": 100,
+  "dimensoes": {"alturaCm": 1, "larguraCm": 1, "comprimentoCm": 1}
+}
+
+> {%
+    client.test("422 SKU já cadastrado", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.codigo === "REGRA_DE_NEGOCIO", "codigo " + response.body.codigo);
+        client.assert(response.body.mensagem === "SKU já cadastrado", "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN01: produto inativo no carrinho
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{inativoId}}, "quantidade": 1}
+
+> {%
+    client.test("422 produto inativo", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.codigo === "REGRA_DE_NEGOCIO", "codigo " + response.body.codigo);
+        client.assert(response.body.mensagem.indexOf("inativo") >= 0, "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN02: mais de 10 unidades do mesmo produto
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}, "quantidade": 11}
+
+> {%
+    client.test("422 máximo por produto", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem.indexOf("no máximo 10") >= 0, "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN03: quantidade acima do estoque na inclusão
+POST {{host}}/carrinhos/{{carrinhoId}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}, "quantidade": 6}
+
+> {%
+    client.test("422 estoque insuficiente (estoque 5, pedido 6)", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem.indexOf("Estoque insuficiente") === 0, "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN03 no pedido: carrinho A com as 2 unidades em estoque
+POST {{host}}/carrinhos
+
+> {%
+    client.global.set("carrinhoA", String(response.body.id));
+%}
+
+###
+POST {{host}}/carrinhos/{{carrinhoA}}/itens
+Content-Type: application/json
+
+{"produtoId": {{escassoId}}, "quantidade": 2}
+
+### Regra RN03 no pedido: carrinho B com as mesmas 2 unidades
+POST {{host}}/carrinhos
+
+> {%
+    client.global.set("carrinhoB", String(response.body.id));
+%}
+
+###
+POST {{host}}/carrinhos/{{carrinhoB}}/itens
+Content-Type: application/json
+
+{"produtoId": {{escassoId}}, "quantidade": 2}
+
+> {%
+    client.test("os dois carrinhos aceitam as 2 unidades", function () {
+        client.assert(response.status === 200, "status " + response.status);
+    });
+%}
+
+### Regra RN03 no pedido: pedido do carrinho A consome o estoque (RN05 com 3 kg)
+POST {{host}}/pedidos
+Content-Type: application/json
+
+{
+  "carrinhoId": {{carrinhoA}},
+  "cliente": {"nome": "Bruno Lima", "email": "bruno@exemplo.com"},
+  "enderecoEntrega": {"logradouro": "Rua B", "numero": "20", "cidade": "Campinas", "uf": "SP", "cep": "13010000"},
+  "modalidadeFrete": "PADRAO"
+}
+
+> {%
+    client.test("201; 3000 g = 3 kg: frete 15,00 + 3 × 2,00 = 21,00; total 60,00 + 21,00 = 81,00", function () {
+        var p = response.body;
+        client.assert(response.status === 201, "status " + response.status);
+        client.assert(p.subtotal === 60 && p.desconto === 0 && p.frete === 21 && p.total === 81, JSON.stringify(p));
+        client.assert(p.enderecoEntrega.complemento === null, "complemento " + p.enderecoEntrega.complemento);
+    });
+%}
+
+### Regra RN03 no pedido: pedido do carrinho B confere o estoque de novo
+POST {{host}}/pedidos
+Content-Type: application/json
+
+{
+  "carrinhoId": {{carrinhoB}},
+  "cliente": {"nome": "Carla Dias", "email": "carla@exemplo.com"},
+  "enderecoEntrega": {"logradouro": "Rua C", "numero": "30", "cidade": "Santos", "uf": "SP", "cep": "11010000"},
+  "modalidadeFrete": "PADRAO"
+}
+
+> {%
+    client.test("422 estoque insuficiente", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem.indexOf("Estoque insuficiente") === 0, "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN08: carrinho C com 1 livro (subtotal 120,00)
+POST {{host}}/carrinhos
+
+> {%
+    client.global.set("carrinhoC", String(response.body.id));
+%}
+
+###
+POST {{host}}/carrinhos/{{carrinhoC}}/itens
+Content-Type: application/json
+
+{"produtoId": {{livroId}}, "quantidade": 1}
+
+### Regra RN08: cupom inexistente
+POST {{host}}/pedidos
+Content-Type: application/json
+
+{
+  "carrinhoId": {{carrinhoC}},
+  "cliente": {"nome": "Ana Souza", "email": "ana@exemplo.com"},
+  "enderecoEntrega": {"logradouro": "Rua A", "numero": "10", "cidade": "São Paulo", "uf": "SP", "cep": "01001000"},
+  "modalidadeFrete": "PADRAO",
+  "cupom": "NAOEXISTE"
+}
+
+> {%
+    client.test("422 cupom inexistente", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem === "Cupom inexistente", "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN08: o código do cupom diferencia maiúsculas de minúsculas
+POST {{host}}/pedidos
+Content-Type: application/json
+
+{
+  "carrinhoId": {{carrinhoC}},
+  "cliente": {"nome": "Ana Souza", "email": "ana@exemplo.com"},
+  "enderecoEntrega": {"logradouro": "Rua A", "numero": "10", "cidade": "São Paulo", "uf": "SP", "cep": "01001000"},
+  "modalidadeFrete": "PADRAO",
+  "cupom": "bemvindo10"
+}
+
+> {%
+    client.test("422 cupom inexistente", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem === "Cupom inexistente", "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Transação: o pedido recusado não baixou o estoque nem esvaziou o carrinho
+GET {{host}}/carrinhos/{{carrinhoC}}
+
+> {%
+    client.test("carrinho C ainda com 1 livro", function () {
+        client.assert(response.body.itens.length === 1, JSON.stringify(response.body.itens));
+    });
+%}
+
+###
+GET {{host}}/produtos/{{livroId}}
+
+> {%
+    client.test("estoque do livro ainda 5", function () {
+        client.assert(response.body.estoque === 5, "estoque " + response.body.estoque);
+    });
+%}
+
+### Regra RN08: subtotal abaixo de 100,00
+POST {{host}}/carrinhos
+
+> {%
+    client.global.set("carrinhoD", String(response.body.id));
+%}
+
+###
+POST {{host}}/carrinhos/{{carrinhoD}}/itens
+Content-Type: application/json
+
+{"produtoId": {{baratoId}}, "quantidade": 1}
+
+###
+POST {{host}}/pedidos
+Content-Type: application/json
+
+{
+  "carrinhoId": {{carrinhoD}},
+  "cliente": {"nome": "Ana Souza", "email": "ana@exemplo.com"},
+  "enderecoEntrega": {"logradouro": "Rua A", "numero": "10", "cidade": "São Paulo", "uf": "SP", "cep": "01001000"},
+  "modalidadeFrete": "PADRAO",
+  "cupom": "BEMVINDO10"
+}
+
+> {%
+    client.test("422 condição do cupom (subtotal 10,00)", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem.indexOf("condição do cupom") >= 0, "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN10: pedido de carrinho vazio (o carrinho do primeiro pedido foi esvaziado)
+POST {{host}}/pedidos
+Content-Type: application/json
+
+{
+  "carrinhoId": {{carrinhoId}},
+  "cliente": {"nome": "Ana Souza", "email": "ana@exemplo.com"},
+  "enderecoEntrega": {"logradouro": "Rua A", "numero": "10", "cidade": "São Paulo", "uf": "SP", "cep": "01001000"},
+  "modalidadeFrete": "PADRAO"
+}
+
+> {%
+    client.test("422 carrinho vazio", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem.indexOf("carrinho vazio") >= 0, "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Regra RN11: cancelar pedido já cancelado
+POST {{host}}/pedidos/{{pedidoId}}/cancelamento
+
+> {%
+    client.test("422 só cancela aguardando pagamento", function () {
+        client.assert(response.status === 422, "status " + response.status);
+        client.assert(response.body.mensagem.indexOf("aguardando pagamento") >= 0, "mensagem " + response.body.mensagem);
+    });
+%}
+
+### Contrato OpenAPI gerado
+GET {{host}}/v3/api-docs
+
+> {%
+    var api = response.body;
+    var s = api.components.schemas;
+
+    function ordenado(lista) {
+        return JSON.stringify((lista || []).slice().sort());
+    }
+
+    function conferirRequired(schema, esperado) {
+        client.test("required de " + schema, function () {
+            client.assert(s[schema] !== undefined, "schema " + schema + " ausente");
+            client.assert(ordenado(s[schema].required) === ordenado(esperado),
+                "esperado " + ordenado(esperado) + ", veio " + ordenado(s[schema].required));
+        });
+    }
+
+    client.test("servidor fixo e relativo", function () {
+        client.assert(api.servers.length === 1 && api.servers[0].url === "/", JSON.stringify(api.servers));
+    });
+
+    client.test("código de sucesso de cada operação", function () {
+        var esperado = {
+            "post /produtos": "201", "get /produtos": "200", "get /produtos/{id}": "200",
+            "post /carrinhos": "201", "get /carrinhos/{id}": "200", "post /carrinhos/{id}/itens": "200",
+            "post /fretes/cotacao": "200",
+            "post /pedidos": "201", "get /pedidos/{id}": "200", "post /pedidos/{id}/cancelamento": "200"
+        };
+        var errados = [];
+        Object.keys(esperado).forEach(function (chave) {
+            var partes = chave.split(" ");
+            var operacao = api.paths[partes[1]] && api.paths[partes[1]][partes[0]];
+            var codigos = operacao ? Object.keys(operacao.responses) : ["(operação ausente)"];
+            if (codigos.length !== 1 || codigos[0] !== esperado[chave]) {
+                errados.push(chave + " = " + codigos.join(","));
+            }
+        });
+        client.assert(errados.length === 0, "esperado só o código de sucesso; veio: " + errados.join("; "));
+    });
+
+    client.test("nenhum schema de erro no contrato", function () {
+        client.assert(s.ErroResponse === undefined && s.CampoErro === undefined, "ErroResponse/CampoErro presente");
+    });
+
+    conferirRequired("ProdutoRequest", ["sku", "nome", "preco", "categoria", "ativo", "estoque", "pesoGramas", "dimensoes"]);
+    conferirRequired("DimensoesRequest", ["alturaCm", "larguraCm", "comprimentoCm"]);
+    conferirRequired("ItemCarrinhoRequest", ["produtoId", "quantidade"]);
+    conferirRequired("CotacaoFreteRequest", ["destino", "modalidade", "itens"]);
+    conferirRequired("DestinoRequest", ["cep", "uf"]);
+    conferirRequired("ItemCotacaoRequest", ["produtoId", "quantidade"]);
+    conferirRequired("PedidoRequest", ["carrinhoId", "cliente", "enderecoEntrega", "modalidadeFrete"]);
+    conferirRequired("ClienteRequest", ["nome", "email"]);
+    conferirRequired("EnderecoRequest", ["logradouro", "numero", "cidade", "uf", "cep"]);
+
+    client.test("enums", function () {
+        client.assert(ordenado(s.ProdutoRequest.properties.categoria.enum) === ordenado(["ELETRONICOS", "LIVROS", "VESTUARIO", "CASA"]), "categoria");
+        client.assert(ordenado(s.CotacaoFreteRequest.properties.modalidade.enum) === ordenado(["PADRAO", "EXPRESSA"]), "modalidade");
+        client.assert(s.DestinoRequest.properties.uf.enum.length === 27, "uf do destino");
+        client.assert(s.EnderecoRequest.properties.uf.enum.length === 27, "uf do endereço");
+        client.assert(ordenado(s.PedidoResponse.properties.status.enum) === ordenado(["AGUARDANDO_PAGAMENTO", "CANCELADO"]), "status");
+    });
+
+    client.test("nenhum limite de negócio no contrato", function () {
+        var texto = JSON.stringify(api);
+        client.assert(texto.indexOf('"maximum"') === -1, "há \"maximum\" no contrato");
+        client.assert(texto.indexOf("BEMVINDO10") === -1, "o cupom aparece no contrato");
+    });
+%}
